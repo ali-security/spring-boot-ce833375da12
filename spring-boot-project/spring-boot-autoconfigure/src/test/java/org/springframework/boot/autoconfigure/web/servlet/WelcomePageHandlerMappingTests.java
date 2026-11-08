@@ -105,7 +105,6 @@ class WelcomePageHandlerMappingTests {
 				.run((context) -> MockMvcBuilders.webAppContextSetup(context).build()
 						.perform(get("/").header(HttpHeaders.ACCEPT, "")).andExpect(status().isOk())
 						.andExpect(forwardedUrl("index.html")));
-
 	}
 
 	@Test
