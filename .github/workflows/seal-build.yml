@@ -1,0 +1,118 @@
+name: Seal build (spring-boot-autoconfigure)
+
+# Upstream builds on Concourse (ci/scripts/build-project.sh: ./gradlew build); this
+# workflow runs the same Gradle build for the spring-boot-autoconfigure module on GitHub Actions.
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "Gradle --tests filter for spring-boot-autoconfigure (empty = full module build incl. all tests)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    name: Build and test spring-boot-autoconfigure (Java 8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      CI: "true"
+      # Testcontainers 1.15.0's Ryuk 0.3.0 reaper and alpine:3.5 startup checks do not run on the current runner Docker;
+      # GitHub runners are ephemeral, so no reaper is needed for cleanup.
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+      TESTCONTAINERS_CHECKS_DISABLE: "true"
+      GRADLE_FLAGS: "-Dorg.gradle.internal.launcher.welcomeMessageEnabled=false --no-daemon --max-workers=4 --console=plain"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+
+      - name: Docker version (Testcontainers integration tests)
+        run: docker version
+
+      - name: Install test result reporter
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/seal-test-results.gradle <<'EOF'
+          allprojects {
+            tasks.withType(Test).configureEach { t ->
+              t.outputs.upToDateWhen { false }
+              t.outputs.cacheIf { false }
+              t.testLogging {
+                events "failed", "skipped"
+                exceptionFormat "full"
+                if (System.getenv("SEAL_SHOW_STREAMS")) {
+                  showStandardStreams = true
+                }
+              }
+              t.afterTest { desc, result ->
+                if (result.resultType == TestResult.ResultType.SKIPPED) {
+                  println "SKIPPED TEST: ${desc.className} > ${desc.name}"
+                } else if (result.resultType == TestResult.ResultType.FAILURE) {
+                  println "FAILED TEST: ${desc.className} > ${desc.name}"
+                }
+              }
+              t.afterSuite { desc, result ->
+                if (desc.parent == null) {
+                  println "TEST SUMMARY ${t.path}: Tests: ${result.testCount}, passed: ${result.successfulTestCount}, failed: ${result.failedTestCount}, skipped: ${result.skippedTestCount}, result: ${result.resultType}"
+                }
+              }
+            }
+          }
+          EOF
+
+      - name: Build and test
+        run: |
+          chmod +x gradlew
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            export SEAL_SHOW_STREAMS=1
+            set -f
+            TESTS_ARGS=""
+            for t in ${{ inputs.test-filter }}; do TESTS_ARGS="$TESTS_ARGS --tests $t"; done
+            ./gradlew $GRADLE_FLAGS :spring-boot-project:spring-boot-autoconfigure:assemble \
+              :spring-boot-project:spring-boot-autoconfigure:test $TESTS_ARGS
+          else
+            ./gradlew $GRADLE_FLAGS :spring-boot-project:spring-boot-autoconfigure:build
+          fi
+
+      - name: Print skipped test reasons
+        if: always()
+        run: |
+          # Gradle's JUnit XML carries no skip message, so resolve each skip's reason from the
+          # @Disabled / @Testcontainers annotation on the test method or class in the source.
+          python3 - <<'EOF'
+          import glob, os, re, xml.etree.ElementTree as ET
+          src = "spring-boot-project/spring-boot-autoconfigure/src/test/java"
+          def reason(cls, method):
+              path = os.path.join(src, cls.split("$")[0].replace(".", "/") + ".java")
+              if not os.path.exists(path):
+                  return "source not found"
+              text = open(path, encoding="utf-8").read()
+              m = re.search(r"((?:\s*@[^\n]*\n)+)\s*(?:public\s+)?void\s+" + re.escape(method.split("(")[0]) + r"\s*\(", text)
+              if m:
+                  d = re.search(r"@Disabled(\(.*\))?", m.group(1))
+                  if d:
+                      return "method annotated " + d.group(0) + " in the released upstream source - intentionally disabled by the Spring Boot maintainers, not an environment skip" + ("" if d.group(1) else " (upstream gives no reason text)")
+              c = re.search(r"@Disabled(\(.*\))?\s*\n(?:\s*@[^\n]*\n)*\s*(?:public\s+)?(?:abstract\s+)?class\s", text)
+              if c:
+                  return "class annotated " + c.group(0).split("\n")[0].strip() + " in upstream source"
+              if "disabledWithoutDocker" in text:
+                  return "@Testcontainers(disabledWithoutDocker = true) and Docker was not usable"
+              return "no @Disabled annotation found"
+          n = 0
+          for f in sorted(glob.glob("spring-boot-project/spring-boot-autoconfigure/build/test-results/test/*.xml")):
+              for tc in ET.parse(f).getroot().iter("testcase"):
+                  if tc.find("skipped") is not None:
+                      n += 1
+                      print(f"SKIPPED: {tc.get('classname')} > {tc.get('name')}: reason: {reason(tc.get('classname'), tc.get('name'))}")
+          print(f"Total skipped testcases in JUnit XML: {n}")
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spring-boot-autoconfigure-jar
+          path: spring-boot-project/spring-boot-autoconfigure/build/libs/spring-boot-autoconfigure-2.3.8.RELEASE.jar
+          if-no-files-found: error

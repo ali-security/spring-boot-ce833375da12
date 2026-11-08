@@ -7,7 +7,12 @@ plugins {
 repositories {
 	mavenCentral()
 	gradlePluginPortal()
-	maven { url "https://repo.spring.io/release" }
+	maven {
+		url "https://repo.gradle.org/gradle/libs-releases"
+		content {
+			includeGroup "org.ysb33r.gradle"
+		}
+	}
 }
 
 sourceCompatibility = 1.8
