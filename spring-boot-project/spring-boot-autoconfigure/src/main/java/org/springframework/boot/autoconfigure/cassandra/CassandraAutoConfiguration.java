@@ -32,6 +32,7 @@ import com.datastax.oss.driver.api.core.config.DefaultDriverOption;
 import com.datastax.oss.driver.api.core.config.DriverConfigLoader;
 import com.datastax.oss.driver.api.core.config.DriverOption;
 import com.datastax.oss.driver.api.core.config.ProgrammaticDriverConfigLoaderBuilder;
+import com.datastax.oss.driver.api.core.ssl.ProgrammaticSslEngineFactory;
 import com.datastax.oss.driver.internal.core.config.typesafe.DefaultDriverConfigLoader;
 import com.datastax.oss.driver.internal.core.config.typesafe.DefaultProgrammaticDriverConfigLoaderBuilder;
 import com.typesafe.config.Config;
@@ -96,7 +97,8 @@ public class CassandraAutoConfiguration {
 	private void configureSsl(CassandraProperties properties, CqlSessionBuilder builder) {
 		if (properties.isSsl()) {
 			try {
-				builder.withSslContext(SSLContext.getDefault());
+				builder.withSslEngineFactory(new ProgrammaticSslEngineFactory(SSLContext.getDefault(), null,
+						properties.isSslVerifyHostname()));
 			}
 			catch (NoSuchAlgorithmException ex) {
 				throw new IllegalStateException("Could not setup SSL default context for Cassandra", ex);

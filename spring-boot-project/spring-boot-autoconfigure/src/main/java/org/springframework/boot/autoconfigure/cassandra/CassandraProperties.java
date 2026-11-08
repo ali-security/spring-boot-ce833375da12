@@ -91,6 +91,11 @@ public class CassandraProperties {
 	private boolean ssl = false;
 
 	/**
+	 * Whether to perform hostname verification when SSL is enabled.
+	 */
+	private boolean sslVerifyHostname = true;
+
+	/**
 	 * Connection configuration.
 	 */
 	private final Connection connection = new Connection();
@@ -237,6 +242,14 @@ public class CassandraProperties {
 
 	public void setSsl(boolean ssl) {
 		this.ssl = ssl;
+	}
+
+	public boolean isSslVerifyHostname() {
+		return this.sslVerifyHostname;
+	}
+
+	public void setSslVerifyHostname(boolean sslVerifyHostname) {
+		this.sslVerifyHostname = sslVerifyHostname;
 	}
 
 	public String getSchemaAction() {

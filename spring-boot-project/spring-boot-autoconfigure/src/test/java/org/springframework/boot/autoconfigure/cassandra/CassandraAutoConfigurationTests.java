@@ -16,11 +16,17 @@
 
 package org.springframework.boot.autoconfigure.cassandra;
 
+import java.net.InetSocketAddress;
+
+import javax.net.ssl.SSLEngine;
+
 import com.datastax.oss.driver.api.core.CqlIdentifier;
 import com.datastax.oss.driver.api.core.CqlSessionBuilder;
 import com.datastax.oss.driver.api.core.config.DefaultDriverOption;
 import com.datastax.oss.driver.api.core.config.DriverConfigLoader;
 import com.datastax.oss.driver.api.core.config.DriverExecutionProfile;
+import com.datastax.oss.driver.api.core.ssl.ProgrammaticSslEngineFactory;
+import com.datastax.oss.driver.internal.core.metadata.DefaultEndPoint;
 import com.datastax.oss.driver.internal.core.session.throttling.ConcurrencyLimitingRequestThrottler;
 import com.datastax.oss.driver.internal.core.session.throttling.PassThroughRequestThrottler;
 import com.datastax.oss.driver.internal.core.session.throttling.RateLimitingRequestThrottler;
@@ -30,6 +36,7 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -53,6 +60,67 @@ class CassandraAutoConfigurationTests {
 			CqlSessionBuilder secondBuilder = context.getBean(CqlSessionBuilder.class);
 			assertThat(secondBuilder).hasFieldOrPropertyWithValue("keyspace", null);
 		});
+	}
+
+	@Test
+	void cqlSessionBuilderWithoutSsl() {
+		this.contextRunner.run((context) -> {
+			CqlSessionBuilder builder = context.getBean(CqlSessionBuilder.class);
+			assertThat(builder).extracting("programmaticArgumentsBuilder.sslEngineFactory").isNull();
+		});
+	}
+
+	@Test
+	void cqlSessionBuilderWithSslEnabled() {
+		this.contextRunner.withPropertyValues("spring.data.cassandra.ssl=true").run((context) -> {
+			CqlSessionBuilder builder = context.getBean(CqlSessionBuilder.class);
+			assertThat(builder).extracting("programmaticArgumentsBuilder.sslEngineFactory")
+					.isInstanceOf(ProgrammaticSslEngineFactory.class)
+					.hasFieldOrPropertyWithValue("requireHostnameValidation", true);
+		});
+	}
+
+	@Test
+	void cqlSessionBuilderWithSslEnabledAndVerifyHostnameDisabled() {
+		this.contextRunner
+				.withPropertyValues("spring.data.cassandra.ssl=true", "spring.data.cassandra.ssl-verify-hostname=false")
+				.run((context) -> {
+					CqlSessionBuilder builder = context.getBean(CqlSessionBuilder.class);
+					assertThat(builder).extracting("programmaticArgumentsBuilder.sslEngineFactory")
+							.isInstanceOf(ProgrammaticSslEngineFactory.class)
+							.hasFieldOrPropertyWithValue("requireHostnameValidation", false);
+				});
+	}
+
+	@Test
+	void cqlSessionBuilderWithSslEnabledCreatesEngineThatVerifiesHostname() {
+		this.contextRunner.withPropertyValues("spring.data.cassandra.ssl=true").run((context) -> {
+			SSLEngine engine = createSslEngine(context.getBean(CqlSessionBuilder.class), "cassandra.example.com");
+			assertThat(engine.getUseClientMode()).isTrue();
+			assertThat(engine.getPeerHost()).isEqualTo("cassandra.example.com");
+			assertThat(engine.getPeerPort()).isEqualTo(9042);
+			assertThat(engine.getSSLParameters().getEndpointIdentificationAlgorithm()).isEqualTo("HTTPS");
+		});
+	}
+
+	@Test
+	void cqlSessionBuilderWithVerifyHostnameDisabledCreatesEngineThatDoesNotVerifyHostname() {
+		this.contextRunner
+				.withPropertyValues("spring.data.cassandra.ssl=true", "spring.data.cassandra.ssl-verify-hostname=false")
+				.run((context) -> {
+					SSLEngine engine = createSslEngine(context.getBean(CqlSessionBuilder.class),
+							"cassandra.example.com");
+					assertThat(engine.getUseClientMode()).isTrue();
+					assertThat(engine.getSSLParameters().getEndpointIdentificationAlgorithm()).isNull();
+				});
+	}
+
+	private SSLEngine createSslEngine(CqlSessionBuilder builder, String host) {
+		Object factory = ReflectionTestUtils
+				.getField(ReflectionTestUtils.getField(builder, "programmaticArgumentsBuilder"), "sslEngineFactory");
+		assertThat(factory).isInstanceOf(ProgrammaticSslEngineFactory.class);
+		return ((ProgrammaticSslEngineFactory) factory)
+				.newSslEngine(new DefaultEndPoint(InetSocketAddress.createUnresolved(host, 9042)));
 	}
 
 	@Test
